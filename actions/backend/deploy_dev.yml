@@ -1,0 +1,132 @@
+name: Deploy Backend to Dev
+
+on:
+  push:
+    branches: [ dev ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    
+    environment: development
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          path: temp-backend
+
+      - name: Create backend environment file
+        run: |
+          cat > /tmp/.env_back << EOF
+          NODE_ENV=development
+          PORT=4000
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          JWT_ACCESS_EXPIRES_IN=60m
+          JWT_REFRESH_EXPIRES_IN=7d
+          CORS_ORIGIN=${{ secrets.CORS_ORIGIN }}
+          EMAIL_SENDER=noreply@cps.gov.ar
+          EOF
+
+      - name: Stop existing backend container
+        run: |
+          cd /home/administrador/projectCPCEER
+          
+          # Gracefully stop backend container
+          docker compose stop backend || true
+          
+          # Remove existing backend container
+          docker compose rm -f backend || true
+          
+          # Clean up any orphaned containers
+          docker container prune -f || true
+
+      - name: Deploy backend code
+        run: |
+          # Create backup of current deployment
+          if [ -d "/home/administrador/projectCPCEER/backend" ]; then
+            sudo cp -r /home/administrador/projectCPCEER/backend /home/administrador/projectCPCEER/backend.backup.$(date +%Y%m%d_%H%M%S) || true
+          fi
+          
+          # Remove old backend code (preserve .github directory for runners)
+          find /home/administrador/projectCPCEER/backend -mindepth 1 -not -path "*/.github*" -delete 2>/dev/null || true
+          
+          # Copy new backend code
+          cp -r temp-backend/* /home/administrador/projectCPCEER/backend/
+          
+          # Update environment file with secrets
+          cp /tmp/.env_back /home/administrador/projectCPCEER/.env_back
+          
+          # Clean up temporary files
+          rm -f /tmp/.env_back
+          rm -rf temp-backend
+
+      - name: Verify database connectivity
+        run: |
+          cd /home/administrador/projectCPCEER
+          
+          # Ensure postgres is running
+          docker compose up -d postgres
+          
+          # Wait for postgres to be ready
+          timeout 60s bash -c 'until docker compose exec postgres pg_isready -U usrOdin; do sleep 2; done'
+          
+          echo "Database connectivity verified"
+
+      - name: Build and start backend container
+        run: |
+          cd /home/administrador/projectCPCEER
+          
+          # Build backend with fresh environment
+          docker compose build backend
+          
+          # Start backend container
+          docker compose up -d backend
+          
+          # Wait for container to be ready
+          sleep 15
+          
+          # Verify deployment
+          docker compose ps backend
+          docker compose logs --tail=20 backend
+
+      - name: Health check
+        run: |
+          cd /home/administrador/projectCPCEER
+          
+          # Wait for backend to be fully ready
+          sleep 10
+          
+          # Test backend health endpoint
+          for i in {1..5}; do
+            if curl -f -s http://localhost:4000/health >/dev/null 2>&1; then
+              echo "Backend health check passed"
+              break
+            else
+              echo "Health check attempt $i failed, retrying in 10 seconds..."
+              sleep 10
+            fi
+          done
+          
+          # Show final status
+          docker compose ps
+          echo "Backend logs:"
+          docker compose logs --tail=10 backend
+
+      - name: Cleanup old backups
+        run: |
+          # Keep only last 3 backups
+          cd /home/administrador/projectCPCEER
+          ls -t backend.backup.* 2>/dev/null | tail -n +4 | xargs rm -rf || true
+
+      - name: Deployment status
+        run: |
+          echo "Backend deployment completed successfully"
+          echo "Container status:"
+          docker compose ps backend
+          echo "Database status:"
+          docker compose ps postgres
+          echo "Recent backend logs:"
+          docker compose logs --tail=15 backend

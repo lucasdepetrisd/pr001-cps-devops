@@ -1,0 +1,9 @@
+/backend
+/frontend
+.git
+.claude
+runners
+old
+
+*.tar
+.env*
