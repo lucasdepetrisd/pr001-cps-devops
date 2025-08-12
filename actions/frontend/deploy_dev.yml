@@ -1,76 +1,37 @@
-name: Deploy Frontend to Dev
+name: Deploy to Dev Environment
 
 on:
   push:
     branches: [ dev ]
-  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: self-hosted
     
-    environment: development
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Create frontend environment file
-        run: |
-          cat > /tmp/.env_front << EOF
-          VITE_API_URL=${{ secrets.API_URL }}
-          NODE_ENV=development
-          EOF
-
-      - name: Deploy frontend code
-        run: |
-          # Create backup of current deployment
-          if [ -d "/home/administrador/projectCPCEER/frontend" ]; then
-            sudo cp -r /home/administrador/projectCPCEER/frontend /home/administrador/projectCPCEER/frontend.backup.$(date +%Y%m%d_%H%M%S) || true
-          fi
-          
-          # Remove old frontend code (preserve .github directory for runners)
-          find /home/administrador/projectCPCEER/frontend -mindepth 1 -not -path "*/.github*" -delete 2>/dev/null || true
-          
-          # Copy new frontend code
-          cp -r . /home/administrador/projectCPCEER/frontend/
-          
-          # Update environment file with secrets
-          cp /tmp/.env_front /home/administrador/projectCPCEER/.env_front
-          
-          # Clean up temporary files
-          rm -f /tmp/.env_front
-
-      - name: Build and restart frontend container
-        run: |
-          cd /home/administrador/projectCPCEER
-          
-          # Stop existing frontend container gracefully
-          docker compose stop frontend || true
-          
-          # Remove existing frontend container
-          docker compose rm -f frontend || true
-          
-          # Build and start frontend with fresh environment
-          docker compose up -d --build frontend
-          
-          # Wait for container to be ready
-          sleep 10
-          
-          # Verify deployment
-          docker compose ps frontend
-          docker compose logs --tail=20 frontend
-
-      - name: Cleanup old backups
-        run: |
-          # Keep only last 3 backups
-          cd /home/administrador/projectCPCEER
-          ls -t frontend.backup.* 2>/dev/null | tail -n +4 | xargs rm -rf || true
-
-      - name: Deployment status
-        run: |
-          echo "Frontend deployment completed successfully"
-          echo "Container status:"
-          docker compose ps frontend
-          echo "Recent logs:"
-          docker compose logs --tail=10 frontend
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        path: temp-frontend
+    
+    - name: Stop existing frontend container
+      run: |
+        cd /home/administrador/projectCPCEER
+        docker-compose stop frontend || true
+        docker-compose rm -f frontend || true
+    
+    - name: Update frontend code
+      run: |
+        # Remove old frontend code
+        rm -rf /home/administrador/projectCPCEER/frontend/*
+        
+        # Copy new code
+        cp -r temp-frontend/* /home/administrador/projectCPCEER/frontend/
+    
+    - name: Build and start frontend
+      run: |
+        cd /home/administrador/projectCPCEER
+        docker-compose up -d --build frontend
+    
+    - name: Clean up
+      run: rm -rf temp-frontend
